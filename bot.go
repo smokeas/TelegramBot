@@ -9,10 +9,6 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
-//mkdir tg_todolist_bot
-//cd tg_todolist_bot
-//go mod tidy
-
 type Bot struct {
 	api     *tgbotapi.BotAPI
 	dataDir string
@@ -56,36 +52,58 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 		return
 	}
 
-	// URL saving (оригинальный функционал)
+	// --- сохранение ссылок ---
 	if isURL(text) {
 		if err := b.store.AddPage(msg.From.ID, text); err != nil {
-			b.reply(msg.Chat.ID, "Error saving page: "+err.Error())
+			b.reply(msg.Chat.ID, "Ошибка при сохранении страницы: "+err.Error())
 			return
 		}
-		b.reply(msg.Chat.ID, "Saved! 👌")
+		b.reply(msg.Chat.ID, "Сохранено! 👌")
 		return
 	}
 
 	parts := strings.Fields(text)
 	if len(parts) == 0 {
-		b.reply(msg.Chat.ID, "Unknown command")
+		b.reply(msg.Chat.ID, msgUnknownCommand)
 		return
 	}
 
 	switch parts[0] {
+	// --- Pages ---
 	case "/rnd":
 		p, err := b.store.PickRandomPage(msg.From.ID)
 		if err != nil {
-			b.reply(msg.Chat.ID, "You have no saved pages 🙊")
+			b.reply(msg.Chat.ID, "У тебя нет сохранённых страниц 🙊")
 			return
 		}
 		b.reply(msg.Chat.ID, p)
-	case "/todo":
-		b.handleTodo(msg)
-	case "/note":
-		b.handleNote(msg)
-	case "/finance":
-		b.handleFinance(msg)
+
+	// --- TODO ---
+	case "/todo_add":
+		b.handleTodoAdd(msg)
+	case "/todo_list":
+		b.handleTodoList(msg)
+	case "/todo_done":
+		b.handleTodoDone(msg)
+	case "/todo_del":
+		b.handleTodoDel(msg)
+
+	// --- NOTES ---
+	case "/note_add":
+		b.handleNoteAdd(msg)
+	case "/note_list":
+		b.handleNoteList(msg)
+	case "/note_del":
+		b.handleNoteDel(msg)
+
+	// --- FINANCE ---
+	case "/finance_add":
+		b.handleFinanceAdd(msg)
+	case "/finance_balance":
+		b.handleFinanceBalance(msg)
+	case "/finance_list":
+		b.handleFinanceList(msg)
+
 	default:
 		b.reply(msg.Chat.ID, msgUnknownCommand)
 	}
@@ -93,9 +111,10 @@ func (b *Bot) handleMessage(msg *tgbotapi.Message) {
 
 func (b *Bot) reply(chatID int64, text string) {
 	m := tgbotapi.NewMessage(chatID, text)
-	m.ParseMode = "Markdown"
+	// не используем Markdown — отправляем plain text, чтобы "_" не интерпретировались
+	// m.ParseMode = "Markdown"  // <- удалить или закомментировать
 	if _, err := b.api.Send(m); err != nil {
-		log.Printf("send error: %v", err)
+		log.Printf("Ошибка при отправке: %v", err)
 	}
 }
 
