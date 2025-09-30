@@ -7,7 +7,7 @@
 
 Начните прямо сейчас и наведите порядок в своих делах!
 
- Для запуска 
+Для запуска 
 go mod tidy
 go build -o bot.exe
 //.\bot.exe -tg-bot-token "You token"
