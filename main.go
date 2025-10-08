@@ -8,14 +8,13 @@ import (
 func main() {
 	token := os.Getenv("TELEGRAM_TOKEN")
 	if token == "" {
-		log.Fatal("TELEGRAM_TOKEN не установлен")
+		log.Fatal("TELEGRAM_TOKEN не задан")
 	}
 
-	bot, err := NewBot(token, "data")
+	bot, err := NewBot(token)
 	if err != nil {
-		log.Fatalf("Ошибка запуска бота: %v", err)
+		log.Fatal(err)
 	}
 
-	log.Printf("Authorized on account %s", bot.api.Self.UserName)
 	bot.Run()
 }
