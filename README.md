@@ -34,3 +34,10 @@ To launch
 go mod tidy
 go build -o bot.exe
 //.\bot.exe -tg-bot-token "You token"
+
+or
+
+go mod tidy
+go build -o bot.exe
+setx TELEGRAM_TOKEN "ваш токен"
+.\bot.exe
