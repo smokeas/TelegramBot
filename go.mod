@@ -1,4 +1,3 @@
-
 module tg_todolist_bot
 
 go 1.20
