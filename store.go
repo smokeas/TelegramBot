@@ -3,76 +3,171 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"math/rand"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
 )
 
-type Task struct {
-	Text string `json:"text"`
-	Done bool   `json:"done"`
+type UserData struct {
+	Todos   []string
+	Notes   []string
+	Finance []string
 }
 
 type Store struct {
-	tasks map[int64][]Task
+	dir   string
+	cache map[int64]*UserData
 }
 
-func NewStore() *Store {
-	return &Store{tasks: make(map[int64][]Task)}
-}
-
-func (s *Store) load(userID int64) {
-	if _, ok := s.tasks[userID]; ok {
-		return // уже загружено
+func NewStore(dir string) *Store {
+	os.MkdirAll(dir, 0755)
+	return &Store{
+		dir:   dir,
+		cache: make(map[int64]*UserData),
 	}
-	filename := fmt.Sprintf("tasks_%d.json", userID)
-	data, err := ioutil.ReadFile(filename)
-	if err != nil {
-		s.tasks[userID] = []Task{}
+}
+
+func (s *Store) filename(userID int64) string {
+	return filepath.Join(s.dir, fmt.Sprintf("%d.json", userID))
+}
+
+func (s *Store) load(userID int64) *UserData {
+	if data, ok := s.cache[userID]; ok {
+		return data
+	}
+
+	file := s.filename(userID)
+	data := &UserData{}
+	bytes, err := os.ReadFile(file)
+	if err == nil {
+		_ = json.Unmarshal(bytes, data)
+	}
+	s.cache[userID] = data
+	return data
+}
+
+func (s *Store) save(userID int64) {
+	file := s.filename(userID)
+	data, _ := json.MarshalIndent(s.cache[userID], "", "  ")
+	_ = os.WriteFile(file, data, 0644)
+}
+
+// === TODO ===
+func (s *Store) AddTodo(userID int64, text string) {
+	u := s.load(userID)
+	u.Todos = append(u.Todos, text)
+	s.save(userID)
+}
+
+func (s *Store) ListTodos(userID int64) string {
+	u := s.load(userID)
+	if len(u.Todos) == 0 {
+		return ""
+	}
+	var out strings.Builder
+	for i, t := range u.Todos {
+		fmt.Fprintf(&out, "%d. %s\n", i+1, t)
+	}
+	return out.String()
+}
+
+func (s *Store) DoneTodo(userID int64, indexStr string) {
+	u := s.load(userID)
+	i, err := strconv.Atoi(indexStr)
+	if err != nil || i < 1 || i > len(u.Todos) {
 		return
 	}
-	var tasks []Task
-	if err := json.Unmarshal(data, &tasks); err != nil {
-		s.tasks[userID] = []Task{}
+	u.Todos[i-1] = "✅ " + u.Todos[i-1]
+	s.save(userID)
+}
+
+func (s *Store) DeleteTodo(userID int64, indexStr string) {
+	u := s.load(userID)
+	i, err := strconv.Atoi(indexStr)
+	if err != nil || i < 1 || i > len(u.Todos) {
 		return
 	}
-	s.tasks[userID] = tasks
+	u.Todos = append(u.Todos[:i-1], u.Todos[i:]...)
+	s.save(userID)
 }
 
-func (s *Store) save(userID int64) error {
-	filename := fmt.Sprintf("tasks_%d.json", userID)
-	data, err := json.MarshalIndent(s.tasks[userID], "", "  ")
-	if err != nil {
-		return err
-	}
-	return ioutil.WriteFile(filename, data, 0644)
+// === NOTES ===
+func (s *Store) AddNote(userID int64, text string) {
+	u := s.load(userID)
+	u.Notes = append(u.Notes, text)
+	s.save(userID)
 }
 
-func (s *Store) AddTask(userID int64, text string) (int, error) {
-	s.load(userID)
-	task := Task{Text: text, Done: false}
-	s.tasks[userID] = append(s.tasks[userID], task)
-	if err := s.save(userID); err != nil {
-		return 0, err
+func (s *Store) ListNotes(userID int64) string {
+	u := s.load(userID)
+	if len(u.Notes) == 0 {
+		return ""
 	}
-	return len(s.tasks[userID]), nil
+	var out strings.Builder
+	for i, n := range u.Notes {
+		fmt.Fprintf(&out, "%d. %s\n", i+1, n)
+	}
+	return out.String()
 }
 
-func (s *Store) MarkDone(userID int64, index int) error {
-	s.load(userID)
-	tasks := s.tasks[userID]
-	if index < 1 || index > len(tasks) {
-		return fmt.Errorf("Неверный номер задачи")
+func (s *Store) DeleteNote(userID int64, indexStr string) {
+	u := s.load(userID)
+	i, err := strconv.Atoi(indexStr)
+	if err != nil || i < 1 || i > len(u.Notes) {
+		return
 	}
-	s.tasks[userID][index-1].Done = true
-	return s.save(userID)
+	u.Notes = append(u.Notes[:i-1], u.Notes[i:]...)
+	s.save(userID)
 }
 
-func (s *Store) DeleteTask(userID int64, index int) error {
-	s.load(userID)
-	tasks := s.tasks[userID]
-	if index < 1 || index > len(tasks) {
-		return fmt.Errorf("Неверный номер задачи")
+// === FINANCE ===
+func (s *Store) AddFinance(userID int64, text string) {
+	u := s.load(userID)
+	u.Finance = append(u.Finance, text)
+	s.save(userID)
+}
+
+func (s *Store) ListFinance(userID int64) string {
+	u := s.load(userID)
+	if len(u.Finance) == 0 {
+		return "Нет финансовых записей."
 	}
-	// удаляем задачу с данным индексом
-	s.tasks[userID] = append(tasks[:index-1], tasks[index:]...)
-	return s.save(userID)
+	var out strings.Builder
+	for i, f := range u.Finance {
+		fmt.Fprintf(&out, "%d. %s\n", i+1, f)
+	}
+	return out.String()
+}
+
+func (s *Store) Balance(userID int64) string {
+	u := s.load(userID)
+	total := 0
+	for _, f := range u.Finance {
+		fields := strings.Fields(f)
+		if len(fields) > 0 {
+			val, err := strconv.Atoi(strings.Trim(fields[0], "+-"))
+			if err == nil {
+				if strings.HasPrefix(fields[0], "-") {
+					total -= val
+				} else {
+					total += val
+				}
+			}
+		}
+	}
+	return fmt.Sprintf("Баланс: %d₽", total)
+}
+
+func (s *Store) Random(userID int64) string {
+	u := s.load(userID)
+	all := append([]string{}, u.Todos...)
+	all = append(all, u.Notes...)
+	if len(all) == 0 {
+		return "Нет данных для выбора."
+	}
+	rand.Seed(time.Now().UnixNano())
+	return all[rand.Intn(len(all))]
 }
