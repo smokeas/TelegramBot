@@ -2,123 +2,164 @@ package main
 
 import (
 	"log"
-	"os"
-	"path/filepath"
 	"strings"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 type Bot struct {
-	api     *tgbotapi.BotAPI
-	dataDir string
-	store   *Store
+	api   *tgbotapi.BotAPI
+	store *Store
+	state map[int64]string
 }
 
-func NewBot(token, dataDir string) (*Bot, error) {
+func NewBot(token string) (*Bot, error) {
 	api, err := tgbotapi.NewBotAPI(token)
 	if err != nil {
 		return nil, err
 	}
-	api.Debug = false
 
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
-		return nil, err
-	}
-
-	s := NewStore(filepath.Join(dataDir, "users"))
-
-	return &Bot{api: api, dataDir: dataDir, store: s}, nil
+	return &Bot{
+		api:   api,
+		store: NewStore("data"),
+		state: make(map[int64]string),
+	}, nil
 }
 
 func (b *Bot) Run() {
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
-
 	updates := b.api.GetUpdatesChan(u)
-	for upd := range updates {
-		if upd.Message == nil {
+
+	for update := range updates {
+		if update.Message == nil {
 			continue
 		}
-		go b.handleMessage(upd.Message)
+		b.handleMessage(update.Message)
 	}
 }
 
-func (b *Bot) handleMessage(msg *tgbotapi.Message) {
-	text := strings.TrimSpace(msg.Text)
+func (b *Bot) handleMessage(m *tgbotapi.Message) {
+	userID := m.Chat.ID
+	text := strings.TrimSpace(m.Text)
 
-	if text == "/start" || text == "/help" {
-		b.reply(msg.Chat.ID, helpText)
+	// Если пользователь в состоянии — ждём текст
+	if state, ok := b.state[userID]; ok {
+		b.handleUserState(userID, state, text)
+		delete(b.state, userID)
 		return
 	}
 
-	// --- сохранение ссылок ---
-	if isURL(text) {
-		if err := b.store.AddPage(msg.From.ID, text); err != nil {
-			b.reply(msg.Chat.ID, "Ошибка при сохранении страницы: "+err.Error())
-			return
+	// Команды
+	if !m.IsCommand() {
+		return
+	}
+
+	switch m.Command() {
+	case "start", "help":
+		b.send(userID, b.helpText())
+
+	case "todo_add":
+		b.state[userID] = "todo_add"
+		b.send(userID, "Введите задачу:")
+
+	case "todo_list":
+		list := b.store.ListTodos(userID)
+		if list == "" {
+			b.send(userID, "Список задач пуст.")
+		} else {
+			b.send(userID, list)
 		}
-		b.reply(msg.Chat.ID, "Сохранено! 👌")
-		return
-	}
 
-	parts := strings.Fields(text)
-	if len(parts) == 0 {
-		b.reply(msg.Chat.ID, msgUnknownCommand)
-		return
-	}
+	case "todo_done":
+		b.state[userID] = "todo_done"
+		b.send(userID, "Введите номер выполненной задачи:")
 
-	switch parts[0] {
-	// --- Pages ---
-	case "/rnd":
-		p, err := b.store.PickRandomPage(msg.From.ID)
-		if err != nil {
-			b.reply(msg.Chat.ID, "У тебя нет сохранённых страниц 🙊")
-			return
+	case "todo_del":
+		b.state[userID] = "todo_del"
+		b.send(userID, "Введите номер задачи для удаления:")
+
+	case "note_add":
+		b.state[userID] = "note_add"
+		b.send(userID, "Введите заметку:")
+
+	case "note_list":
+		list := b.store.ListNotes(userID)
+		if list == "" {
+			b.send(userID, "Список заметок пуст.")
+		} else {
+			b.send(userID, list)
 		}
-		b.reply(msg.Chat.ID, p)
 
-	// --- TODO ---
-	case "/todo_add":
-		b.handleTodoAdd(msg)
-	case "/todo_list":
-		b.handleTodoList(msg)
-	case "/todo_done":
-		b.handleTodoDone(msg)
-	case "/todo_del":
-		b.handleTodoDel(msg)
+	case "note_del":
+		b.state[userID] = "note_del"
+		b.send(userID, "Введите номер заметки для удаления:")
 
-	// --- NOTES ---
-	case "/note_add":
-		b.handleNoteAdd(msg)
-	case "/note_list":
-		b.handleNoteList(msg)
-	case "/note_del":
-		b.handleNoteDel(msg)
+	case "finance_add":
+		b.state[userID] = "finance_add"
+		b.send(userID, "Введите сумму и комментарий (например: +500 зарплата или -200 еда):")
 
-	// --- FINANCE ---
-	case "/finance_add":
-		b.handleFinanceAdd(msg)
-	case "/finance_balance":
-		b.handleFinanceBalance(msg)
-	case "/finance_list":
-		b.handleFinanceList(msg)
+	case "finance_list":
+		b.send(userID, b.store.ListFinance(userID))
+
+	case "finance_balance":
+		b.send(userID, b.store.Balance(userID))
+
+	case "rnd":
+		b.send(userID, b.store.Random(userID))
 
 	default:
-		b.reply(msg.Chat.ID, msgUnknownCommand)
+		b.send(userID, "Неизвестная команда. Введите /help")
 	}
 }
 
-func (b *Bot) reply(chatID int64, text string) {
-	m := tgbotapi.NewMessage(chatID, text)
-	// не используем Markdown — отправляем plain text, чтобы "_" не интерпретировались
-	// m.ParseMode = "Markdown"  // <- удалить или закомментировать
-	if _, err := b.api.Send(m); err != nil {
-		log.Printf("Ошибка при отправке: %v", err)
+func (b *Bot) handleUserState(userID int64, state, text string) {
+	switch state {
+	case "todo_add":
+		b.store.AddTodo(userID, text)
+		b.send(userID, "Задача добавлена ✅")
+
+	case "todo_done":
+		b.store.DoneTodo(userID, text)
+		b.send(userID, "Задача отмечена как выполненная ✅")
+
+	case "todo_del":
+		b.store.DeleteTodo(userID, text)
+		b.send(userID, "Задача удалена 🗑️")
+
+	case "note_add":
+		b.store.AddNote(userID, text)
+		b.send(userID, "Заметка сохранена 📝")
+
+	case "note_del":
+		b.store.DeleteNote(userID, text)
+		b.send(userID, "Заметка удалена 🗑️")
+
+	case "finance_add":
+		b.store.AddFinance(userID, text)
+		b.send(userID, "Финансовая запись добавлена 💰")
 	}
 }
 
-func isURL(s string) bool {
-	s = strings.TrimSpace(s)
-	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
+func (b *Bot) helpText() string {
+	return strings.Join([]string{
+		"/todo_add",
+		"/todo_list",
+		"/todo_done",
+		"/todo_del",
+		"/note_add",
+		"/note_list",
+		"/note_del",
+		"/finance_add",
+		"/finance_list",
+		"/finance_balance",
+		"/rnd",
+	}, "\n")
+}
+
+func (b *Bot) send(chatID int64, text string) {
+	msg := tgbotapi.NewMessage(chatID, text)
+	if _, err := b.api.Send(msg); err != nil {
+		log.Println("Ошибка отправки сообщения:", err)
+	}
 }
