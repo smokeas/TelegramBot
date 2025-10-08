@@ -8,7 +8,18 @@
 Начните прямо сейчас и наведите порядок в своих делах!
 
 Для запуска 
+go mod tidy
+go build -o bot.exe
+.\bot.exe -tg-bot-token "You token"
 
+
+
+2 способ
+
+go mod tidy
+go build -o bot.exe
+setx TELEGRAM_TOKEN "ваш токен"
+.\bot.exe
 
 What I can
 do: 🎯 To-Do list: Create tasks, set deadlines, and track your progress.
@@ -20,4 +31,13 @@ Start right now and get your affairs in order!
 
 To launch
 
+go mod tidy
+go build -o bot.exe
+//.\bot.exe -tg-bot-token "You token"
 
+or
+
+go mod tidy
+go build -o bot.exe
+setx TELEGRAM_TOKEN "ваш токен"
+.\bot.exe
