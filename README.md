@@ -8,10 +8,6 @@
 Начните прямо сейчас и наведите порядок в своих делах!
 
 Для запуска 
-go mod tidy
-go build -o bot.exe
-//.\bot.exe -tg-bot-token "You token"
-
 
 
 What I can
@@ -24,6 +20,4 @@ Start right now and get your affairs in order!
 
 To launch
 
-go mod tidy
-go build -o bot.exe
-//.\bot.exe -tg-bot-token "You token"
+
