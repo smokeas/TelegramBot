@@ -2,177 +2,172 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
+	"fmt"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"strconv"
-	"sync"
+	"strings"
 	"time"
 )
 
-type Store struct {
-	dir string
-	mu  sync.Mutex
-}
-
 type UserData struct {
-	Pages   []string      `json:"pages"`
-	Todos   []Todo        `json:"todos"`
-	Notes   []string      `json:"notes"`
-	Finance []Transaction `json:"finance"`
+	Todos   []string
+	Notes   []string
+	Finance []string
 }
 
-type Todo struct {
-	Text string `json:"text"`
-	Done bool   `json:"done"`
-}
-
-type Transaction struct {
-	Kind   string  `json:"kind"` // income | expense
-	Amount float64 `json:"amount"`
-	Desc   string  `json:"desc"`
+type Store struct {
+	dir   string
+	cache map[int64]*UserData
 }
 
 func NewStore(dir string) *Store {
-	os.MkdirAll(dir, 0o755)
-	return &Store{dir: dir}
+	os.MkdirAll(dir, 0755)
+	return &Store{
+		dir:   dir,
+		cache: make(map[int64]*UserData),
+	}
 }
 
-func (s *Store) file(userID int64) string {
-	return filepath.Join(s.dir, strconv.FormatInt(userID, 10)+".json")
+func (s *Store) filename(userID int64) string {
+	return filepath.Join(s.dir, fmt.Sprintf("%d.json", userID))
 }
 
-func (s *Store) load(userID int64) (UserData, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	path := s.file(userID)
-	var data UserData
-
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		return data, nil
+func (s *Store) load(userID int64) *UserData {
+	if data, ok := s.cache[userID]; ok {
+		return data
 	}
 
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return data, err
+	file := s.filename(userID)
+	data := &UserData{}
+	bytes, err := os.ReadFile(file)
+	if err == nil {
+		_ = json.Unmarshal(bytes, data)
 	}
+	s.cache[userID] = data
+	return data
+}
 
-	if err := json.Unmarshal(b, &data); err != nil {
-		return data, err
+func (s *Store) save(userID int64) {
+	file := s.filename(userID)
+	data, _ := json.MarshalIndent(s.cache[userID], "", "  ")
+	_ = os.WriteFile(file, data, 0644)
+}
+
+// === TODO ===
+func (s *Store) AddTodo(userID int64, text string) {
+	u := s.load(userID)
+	u.Todos = append(u.Todos, text)
+	s.save(userID)
+}
+
+func (s *Store) ListTodos(userID int64) string {
+	u := s.load(userID)
+	if len(u.Todos) == 0 {
+		return ""
 	}
-
-	return data, nil
-}
-
-func (s *Store) save(userID int64, data UserData) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	path := s.file(userID)
-	b, err := json.MarshalIndent(data, "", "  ")
-	if err != nil {
-		return err
+	var out strings.Builder
+	for i, t := range u.Todos {
+		fmt.Fprintf(&out, "%d. %s\n", i+1, t)
 	}
-
-	return os.WriteFile(path, b, 0o644)
+	return out.String()
 }
 
-// --- Pages ---
-func (s *Store) AddPage(userID int64, url string) error {
-	data, _ := s.load(userID)
-	data.Pages = append(data.Pages, url)
-	return s.save(userID, data)
-}
-
-func (s *Store) PickRandomPage(userID int64) (string, error) {
-	data, _ := s.load(userID)
-	if len(data.Pages) == 0 {
-		return "", errors.New("no pages")
+func (s *Store) DoneTodo(userID int64, indexStr string) {
+	u := s.load(userID)
+	i, err := strconv.Atoi(indexStr)
+	if err != nil || i < 1 || i > len(u.Todos) {
+		return
 	}
-	rand.Seed(time.Now().UnixNano())
-	idx := rand.Intn(len(data.Pages))
-	page := data.Pages[idx]
-	data.Pages = append(data.Pages[:idx], data.Pages[idx+1:]...)
-	s.save(userID, data)
-	return page, nil
+	u.Todos[i-1] = "✅ " + u.Todos[i-1]
+	s.save(userID)
 }
 
-// --- Todos ---
-func (s *Store) AddTodo(userID int64, task string) {
-	data, _ := s.load(userID)
-	data.Todos = append(data.Todos, Todo{Text: task})
-	s.save(userID, data)
-}
-
-func (s *Store) GetTodos(userID int64) []Todo {
-	data, _ := s.load(userID)
-	return data.Todos
-}
-
-func (s *Store) MarkTodoDone(userID int64, idx int) error {
-	data, _ := s.load(userID)
-	if idx < 0 || idx >= len(data.Todos) {
-		return errors.New("out of range")
+func (s *Store) DeleteTodo(userID int64, indexStr string) {
+	u := s.load(userID)
+	i, err := strconv.Atoi(indexStr)
+	if err != nil || i < 1 || i > len(u.Todos) {
+		return
 	}
-	data.Todos[idx].Done = true
-	return s.save(userID, data)
+	u.Todos = append(u.Todos[:i-1], u.Todos[i:]...)
+	s.save(userID)
 }
 
-func (s *Store) DeleteTodo(userID int64, idx int) error {
-	data, _ := s.load(userID)
-	if idx < 0 || idx >= len(data.Todos) {
-		return errors.New("out of range")
-	}
-	data.Todos = append(data.Todos[:idx], data.Todos[idx+1:]...)
-	return s.save(userID, data)
-}
-
-// --- Notes ---
+// === NOTES ===
 func (s *Store) AddNote(userID int64, text string) {
-	data, _ := s.load(userID)
-	data.Notes = append(data.Notes, text)
-	s.save(userID, data)
+	u := s.load(userID)
+	u.Notes = append(u.Notes, text)
+	s.save(userID)
 }
 
-func (s *Store) GetNotes(userID int64) []string {
-	data, _ := s.load(userID)
-	return data.Notes
-}
-
-func (s *Store) DeleteNote(userID int64, idx int) error {
-	data, _ := s.load(userID)
-	if idx < 0 || idx >= len(data.Notes) {
-		return errors.New("out of range")
+func (s *Store) ListNotes(userID int64) string {
+	u := s.load(userID)
+	if len(u.Notes) == 0 {
+		return ""
 	}
-	data.Notes = append(data.Notes[:idx], data.Notes[idx+1:]...)
-	return s.save(userID, data)
-}
-
-// --- Finance ---
-func (s *Store) AddFinance(userID int64, kind string, amount float64, desc string) error {
-	if kind != "income" && kind != "expense" {
-		return errors.New("invalid kind")
+	var out strings.Builder
+	for i, n := range u.Notes {
+		fmt.Fprintf(&out, "%d. %s\n", i+1, n)
 	}
-	data, _ := s.load(userID)
-	data.Finance = append(data.Finance, Transaction{Kind: kind, Amount: amount, Desc: desc})
-	return s.save(userID, data)
+	return out.String()
 }
 
-func (s *Store) GetFinance(userID int64) []Transaction {
-	data, _ := s.load(userID)
-	return data.Finance
+func (s *Store) DeleteNote(userID int64, indexStr string) {
+	u := s.load(userID)
+	i, err := strconv.Atoi(indexStr)
+	if err != nil || i < 1 || i > len(u.Notes) {
+		return
+	}
+	u.Notes = append(u.Notes[:i-1], u.Notes[i:]...)
+	s.save(userID)
 }
 
-func (s *Store) FinanceBalance(userID int64) (income, expense float64) {
-	data, _ := s.load(userID)
-	for _, t := range data.Finance {
-		if t.Kind == "income" {
-			income += t.Amount
-		} else {
-			expense += t.Amount
+// === FINANCE ===
+func (s *Store) AddFinance(userID int64, text string) {
+	u := s.load(userID)
+	u.Finance = append(u.Finance, text)
+	s.save(userID)
+}
+
+func (s *Store) ListFinance(userID int64) string {
+	u := s.load(userID)
+	if len(u.Finance) == 0 {
+		return "Нет финансовых записей."
+	}
+	var out strings.Builder
+	for i, f := range u.Finance {
+		fmt.Fprintf(&out, "%d. %s\n", i+1, f)
+	}
+	return out.String()
+}
+
+func (s *Store) Balance(userID int64) string {
+	u := s.load(userID)
+	total := 0
+	for _, f := range u.Finance {
+		fields := strings.Fields(f)
+		if len(fields) > 0 {
+			val, err := strconv.Atoi(strings.Trim(fields[0], "+-"))
+			if err == nil {
+				if strings.HasPrefix(fields[0], "-") {
+					total -= val
+				} else {
+					total += val
+				}
+			}
 		}
 	}
-	return
+	return fmt.Sprintf("Баланс: %d₽", total)
+}
+
+func (s *Store) Random(userID int64) string {
+	u := s.load(userID)
+	all := append([]string{}, u.Todos...)
+	all = append(all, u.Notes...)
+	if len(all) == 0 {
+		return "Нет данных для выбора."
+	}
+	rand.Seed(time.Now().UnixNano())
+	return all[rand.Intn(len(all))]
 }
